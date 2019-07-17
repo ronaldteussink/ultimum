@@ -1,0 +1,8 @@
+# VMWare functions
+function Stop-ULTVMAndWait
+{
+}
+
+function Start-ULTVMAndWait
+{
+}
