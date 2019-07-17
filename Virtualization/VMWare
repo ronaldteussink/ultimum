@@ -1,8 +1,557 @@
-# VMWare functions
+<#
+.SYNOPSIS
+Stops an ESXi hypervisor virtual machine (VM) and waits until the operation is done.
+
+.DESCRIPTION
+Assumes an active connection to a VMware vCenter server to where the VM is located. Queries the current power status of
+the VM and stops its Guest if it's running. Waits until vCenter reports that the power state is PoweredOff.
+A clean guest shutdown is initiated, though any running programs or sessions will be terminated.
+Input is possible from VM name (and Server), from an explicit VM object or from a pipeline VM object.
+This function generates no output, unless PassThru is specified. Verbose output is possible.
+
+.EXAMPLE
+Stop-ULTVMAndWait -Name VMTEST -Server VCENTERSERVER
+
+Stops the first VM with name VMTEST on vCenter server name VCENTERSERVER.
+.EXAMPLE
+Stop-ULTVMAndWait -VM $theVM -PollingTime 10
+
+Stops the VM in variable $theVM and checks every 10 seconds to see the VM status.
+#>
 function Stop-ULTVMAndWait
 {
+[cmdletBinding()]
+Param(
+# Name of the VM
+[Parameter(ParameterSetName='vmname',Mandatory=$true)]
+[ValidateNotNullOrEmpty()]
+[string]
+$Name,
+# Name of the vCenter server
+[Parameter(ParameterSetName='vmname',Mandatory=$true)]
+[ValidateNotNullOrEmpty()]
+[string]
+$Server,
+# VM Input Object (assumes already connected to vCenter server)
+[Parameter(ParameterSetName='vmobjectinput',Mandatory=$true,ValueFromPipeline=$true)]
+[ValidateNotNullOrEmpty()]
+[pscustomobject]
+$InputObject,
+# VM Object (assumes already connected to vCenter server)
+[Parameter(ParameterSetName='vmobjectexplicit',Mandatory=$true)]
+[ValidateNotNullOrEmpty()]
+[pscustomobject]
+$VM,
+# Time to wait until each check (seconds)
+[Parameter(Mandatory=$false)]
+[ValidateRange(1,3600)] 
+[System.Int16]
+$PollingTime = 5,
+# Optionally return an object of the VM to the pipeline
+[switch]$PassThru
+)
+Process {
+$shutdownCounter = 0
+$verbosityPreference = $VerbosePreference
+if ([string]::IsNullOrEmpty($PollingTime)) {$PollingTime = 5}
+$vmStopped = $false
+if ($PSCmdlet.ParameterSetName -eq 'vmname')
+{
+Write-Verbose -Message "Sending stop signal to VM Name $($Name) on Server $($Server)"
+$VerbosePreference = 'SilentlyContinue'
+Get-VM -Name $Name -Server $Server | Select-Object -First 1 | Stop-VMGuest -Confirm:$false | Out-Null
+$VerbosePreference = $verbosityPreference
+Write-Verbose -Message "Signal sent!"
+while ($vmStopped -eq $false)
+{
+$VerbosePreference = 'SilentlyContinue'
+$vmPowerState = Get-VM -Name $Name -Server $Server | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -ne 'PoweredOff')
+{
+Write-Verbose -Message "Waiting for VM Name $($Name) on Server $($Server) to shutdown, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$shutdownCounter += $PollingTime
+}
+else
+{
+$vmStopped = $true
+$returnObject = Get-VM -Name $Name -Server $Server | Select-Object -First 1
+}
+}
+}
+elseif ($PSCmdlet.ParameterSetName -eq 'vmobjectexplicit')
+{
+$VerbosePreference = 'SilentlyContinue'
+Get-VM $VM | Select-Object -First 1 | Stop-VMGuest -Confirm:$false | Out-Null
+$VerbosePreference = $verbosityPreference
+while ($vmStopped -eq $false)
+{
+$VerbosePreference = 'SilentlyContinue'
+$vmPowerState = Get-VM $VM | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -ne 'PoweredOff')
+{
+Write-Verbose -Message "Waiting for VM Object $($VM.Name) to shutdown, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$shutdownCounter += $PollingTime
+}
+else
+{
+$vmStopped = $true
+$returnObject = $VM
+}
+}
+}
+elseif ($PSCmdlet.ParameterSetName -eq 'vmobjectinput')
+{
+$VerbosePreference = 'SilentlyContinue'
+Get-VM $InputObject | Select-Object -First 1 | Stop-VMGuest -Confirm:$false | Out-Null
+$VerbosePreference = $verbosityPreference
+while ($vmStopped -eq $false)
+{
+$VerbosePreference = 'SilentlyContinue'
+$vmPowerState = Get-VM $InputObject | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -ne 'PoweredOff')
+{
+Write-Verbose -Message "Waiting for VM Input Object $($InputObject.Name) to shutdown, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$shutdownCounter += $PollingTime
+}
+else
+{
+$vmStopped = $true
+$returnObject = Get-VM $InputObject
+}
+}
+}
+Write-Verbose -Message "VM is stopped after $($shutdownCounter) second(s)!"
+if ($PassThru.IsPresent)
+{
+return $returnObject
+}
+}
 }
 
+# Helper function to start a VM and wait until its hypervisor host (ESXi) reports it as Powered On. Optionally wait for Guest IP
+<#
+.SYNOPSIS
+Starts an ESXi hypervisor virtual machine (VM) and waits until the operation is done.
+
+.DESCRIPTION
+Assumes an active connection to a VMware vCenter server to where the VM is located. Queries the current power status of
+the VM and starts its Guest if it's stopped.
+Input is possible from VM name (and Server), from an explicit VM object or from a pipeline VM object.
+The function returns after the vCenter server reports back that the power state is PoweredOn.
+If the switch WaitForIP is provided, then we wait until an IP address is registered with the VM status.
+If the switch WaitForCustomization is 
+This function generates no output, unless PassThru is specified. Verbose output is possible.
+
+.EXAMPLE
+Stop-ULTVMAndWait -Name VMTEST -Server VCENTERSERVER
+
+Stops the first VM with name VMTEST on vCenter server name VCENTERSERVER.
+.EXAMPLE
+Stop-ULTVMAndWait -VM $theVM -PollingTime 10
+
+Stops the VM in variable $theVM and checks every 10 seconds to see the VM status.
+#>
 function Start-ULTVMAndWait
 {
+[cmdletBinding()]
+Param(
+# Name of the VM
+[Parameter(ParameterSetName='vmname',Mandatory=$true)]
+[ValidateNotNullOrEmpty()]
+[string]
+$Name,
+# Name of the vCenter server
+[Parameter(ParameterSetName='vmname',Mandatory=$true)]
+[ValidateNotNullOrEmpty()]
+[string]
+$Server,
+# VM Input Object (assumes already connected to vCenter server)
+[Parameter(ParameterSetName='vmobjectinput',Mandatory=$true,ValueFromPipeline=$true)]
+[ValidateNotNullOrEmpty()]
+[pscustomobject]
+$InputObject,
+# VM Object (assumes already connected to vCenter server)
+[Parameter(ParameterSetName='vmobjectexplicit',Mandatory=$true)]
+[ValidateNotNullOrEmpty()]
+[pscustomobject]
+$VM,
+# Time to wait until each check (seconds)
+[Parameter(Mandatory=$false)]
+[ValidateRange(1,3600)] 
+[System.Int16]
+$PollingTime = 5,
+# Wait until VM Guest tools return an IP address
+[switch]$WaitForIP,
+# Wait until VM Guest has finished customization
+[switch]$WaitForCustomization,
+# Optionally return an object of the VM to the pipeline
+[switch]$PassThru
+)
+Process {
+$startupCounter = 0
+$verbosityPreference = $VerbosePreference
+if ([string]::IsNullOrEmpty($PollingTime)) {$PollingTime = 5}
+$vmWaitedForIP = $false
+$vmWaitedForCustomization = $false
+$vmStarted = $false
+if ($PSCmdlet.ParameterSetName -eq 'vmname')
+{
+$VerbosePreference = 'SilentlyContinue'
+[void](Get-VM -Name $Name -Server $Server -ErrorAction Stop)
+$vmPowerState = Get-VM -Name $Name -Server $Server | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -eq 'PoweredOn')
+{
+Write-Warning -Message "VM Name $($Name) on Server $($Server) is already started!"
+return
+}
+Write-Verbose -Message "Sending start signal to VM Name $($Name) on Server $($Server)"
+$VerbosePreference = 'SilentlyContinue'
+Get-VM -Name $Name -Server $Server | Select-Object -First 1 | Start-VM -Confirm:$false | Out-Null
+$VerbosePreference = $verbosityPreference
+Write-Verbose -Message "Signal sent!"
+while ($vmStarted -eq $false)
+{
+$VerbosePreference = 'SilentlyContinue'
+$vmPowerState = Get-VM -Name $Name -Server $Server | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -ne 'PoweredOn')
+{
+Write-Verbose -Message "Waiting for VM Name $($Name) on Server $($Server) to power on, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$startupCounter += $PollingTime
+}
+else
+{
+if ($WaitForIP.IsPresent -or $WaitForCustomization.IsPresent)
+{
+if ($WaitForIP.IsPresent)
+{
+if ($vmWaitedForIP -eq $false)
+{
+Try {
+Write-Verbose -Message "Attempting to retrieve Guest IP address for VM Name $($Name) on Server $($Server)"
+$VerbosePreference = 'SilentlyContinue'
+$guestIP = Get-VM -Name $Name -Server $Server | Select-Object -First 1 | Get-VMGuest | Select-Object -ExpandProperty IPAddress -First 1
+$VerbosePreference = $verbosityPreference
+} Catch {
+# ignore
+}
+if (-not([string]::IsNullOrEmpty($guestIP)))
+{
+Write-Verbose -Message "IP address found!"
+$vmWaitedForIP = $true
+}
+else 
+{
+Write-Verbose -Message "No IP address found, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$startupCounter += $PollingTime
+}
+}
+}
+if ($WaitForCustomization.IsPresent)
+{
+if ($vmWaitedForCustomization -eq $false)
+{
+Try {
+$VerbosePreference = 'SilentlyContinue'
+$guestCust = Get-VM -Name $Name -Server $Server | Select-Object -First 1 | Invoke-VMScript -ScriptType Powershell -ScriptText 'Test-Path $env:windir\Temp\vmware-imc\toolsDeployPkg.log' -ErrorAction SilentlyContinue
+$VerbosePreference = $verbosityPreference
+} Catch {
+# ignore
+}
+if (-not([string]::IsNullOrEmpty($guestCust)))
+{
+Write-Verbose -Message "Customization log found!"
+$vmWaitedForCustomization = $true
+}
+else 
+{
+Write-Verbose -Message "No Customization log found, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$startupCounter += $PollingTime
+}
+}
+}
+if ($WaitForIP.IsPresent -and -not($WaitForCustomization.IsPresent))
+{
+if ($vmWaitedForIP -eq $true)
+{
+Write-Verbose -Message "VM is powered on and has an IP after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM -Name $Name -Server $Server | Select-Object -First 1
+}
+}
+elseif ($WaitForIP.IsPresent -and $WaitForCustomization.IsPresent)
+{
+if ($vmWaitedForIP -eq $true -and $vmWaitedForCustomization -eq $true)
+{
+Write-Verbose -Message "VM is powered on, has an IP and is customized after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM -Name $Name -Server $Server | Select-Object -First 1
+}
+}
+else
+{
+if ($vmWaitedForCustomization -eq $true)
+{
+Write-Verbose -Message "VM is powered on and is customized after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM -Name $Name -Server $Server | Select-Object -First 1
+}
+}
+} 
+else
+{
+Write-Verbose -Message "VM is powered on after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM -Name $Name -Server $Server | Select-Object -First 1
+}
+}
+}
+}
+elseif ($PSCmdlet.ParameterSetName -eq 'vmobjectexplicit')
+{
+$VerbosePreference = 'SilentlyContinue'
+$vmPowerState = Get-VM $VM | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -eq 'PoweredOn')
+{
+Write-Warning -Message "VM Object $($VM.Name) is already started!"
+return
+}
+Write-Verbose -Message "Sending start signal to VM Object $($VM.Name)"
+$VerbosePreference = 'SilentlyContinue'
+Get-VM $VM | Select-Object -First 1 | Start-VM -Confirm:$false | Out-Null
+$VerbosePreference = $verbosityPreference
+Write-Verbose -Message "Signal sent!"
+while ($vmStarted -eq $false)
+{
+$VerbosePreference = 'SilentlyContinue'
+$vmPowerState = Get-VM $VM | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -ne 'PoweredOn')
+{
+Write-Verbose -Message "Waiting for VM Object $($VM.Name) to power on, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds 5
+$startupCounter += $PollingTime
+}
+else
+{
+if ($WaitForIP.IsPresent -or $WaitForCustomization.IsPresent)
+{
+if ($WaitForIP.IsPresent)
+{
+if ($vmWaitedForIP -eq $false)
+{
+Try {
+Write-Verbose -Message "Attempting to retrieve Guest IP address for VM Object $($VM.Name)"
+$VerbosePreference = 'SilentlyContinue'
+$guestIP = Get-VM $VM | Select-Object -First 1 | Get-VMGuest | Select-Object -ExpandProperty IPAddress -First 1
+$VerbosePreference = $verbosityPreference
+} Catch {
+# ignore
+}
+if (-not([string]::IsNullOrEmpty($guestIP)))
+{
+Write-Verbose -Message "IP address found!"
+$vmWaitedForIP = $true
+}
+else 
+{
+Write-Verbose -Message "No IP address found, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$startupCounter += $PollingTime 
+}
+}
+}
+if ($WaitForCustomization.IsPresent)
+{
+if ($vmWaitedForCustomization -eq $false)
+{
+Try {
+$VerbosePreference = 'SilentlyContinue'
+$guestCust = Get-VM $VM | Select-Object -First 1 | Invoke-VMScript -ScriptType Powershell -ScriptText 'Test-Path $env:windir\Temp\vmware-imc\toolsDeployPkg.log' -ErrorAction SilentlyContinue
+$VerbosePreference = $verbosityPreference
+} Catch {
+# ignore
+}
+if (-not([string]::IsNullOrEmpty($guestCust)))
+{
+Write-Verbose -Message "Customization log found!"
+$vmWaitedForCustomization = $true
+}
+else 
+{
+Write-Verbose -Message "No Customization log found, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$startupCounter += $PollingTime 
+}
+}
+}
+if ($WaitForIP.IsPresent -and -not($WaitForCustomization.IsPresent))
+{
+if ($vmWaitedForIP -eq $true)
+{
+Write-Verbose -Message "VM is powered on and has an IP after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM $VM
+}
+}
+elseif ($WaitForIP.IsPresent -and $WaitForCustomization.IsPresent)
+{
+if ($vmWaitedForIP -eq $true -and $vmWaitedForCustomization -eq $true)
+{
+Write-Verbose -Message "VM is powered on, has an IP and is customized after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM $VM
+}
+}
+else
+{
+if ($vmWaitedForCustomization -eq $true)
+{
+Write-Verbose -Message "VM is powered on and is customized after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM $VM
+}
+}
+} 
+else
+{
+Write-Verbose -Message "VM is powered on after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM $VM
+}
+}
+}
+}
+elseif ($PSCmdlet.ParameterSetName -eq 'vmobjectinput')
+{
+$VerbosePreference = 'SilentlyContinue'
+$vmPowerState = Get-VM $InputObject | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -eq 'PoweredOn')
+{
+Write-Warning -Message "VM Input Object $($InputObject.Name) is already started!"
+return
+}
+Write-Verbose -Message "Sending start signal to VM Input Object $($InputObject.Name)"
+$VerbosePreference = 'SilentlyContinue'
+Get-VM $InputObject | Select-Object -First 1 | Start-VM -Confirm:$false | Out-Null
+$VerbosePreference = $verbosityPreference
+Write-Verbose -Message "Signal sent!"
+while ($vmStarted -eq $false)
+{
+$VerbosePreference = 'SilentlyContinue'
+$vmPowerState = Get-VM $InputObject | Select-Object -First 1 -ExpandProperty PowerState
+$VerbosePreference = $verbosityPreference
+if ($vmPowerState -ne 'PoweredOn')
+{
+Write-Verbose -Message "Waiting for VM Input Object $($InputObject.Name) to power on, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds 5
+$startupCounter += $PollingTime
+}
+else
+{
+if ($WaitForIP.IsPresent -or $WaitForCustomization.IsPresent)
+{
+if ($WaitForIP.IsPresent)
+{
+if ($vmWaitedForIP -eq $false)
+{
+Try {
+Write-Verbose -Message "Attempting to retrieve Guest IP address for VM Input Object $($InputObject.Name)"
+$VerbosePreference = 'SilentlyContinue'
+$guestIP = Get-VM $InputObject | Select-Object -First 1 | Get-VMGuest | Select-Object -ExpandProperty IPAddress -First 1
+$VerbosePreference = $verbosityPreference
+} Catch {
+# ignore
+}
+if (-not([string]::IsNullOrEmpty($guestIP)))
+{
+Write-Verbose -Message "IP address found!"
+$vmWaitedForIP = $true
+}
+else 
+{
+Write-Verbose -Message "No IP address found, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$startupCounter += $PollingTime 
+}
+}
+}
+if ($WaitForCustomization.IsPresent)
+{
+if ($vmWaitedForCustomization -eq $false)
+{
+Try {
+$VerbosePreference = 'SilentlyContinue'
+$guestCust = Get-VM $InputObject | Select-Object -First 1 | Invoke-VMScript -ScriptType Powershell -ScriptText 'Test-Path $env:windir\Temp\vmware-imc\toolsDeployPkg.log' -ErrorAction SilentlyContinue
+$VerbosePreference = $verbosityPreference
+} Catch {
+# ignore
+}
+if (-not([string]::IsNullOrEmpty($guestCust)))
+{
+Write-Verbose -Message "Customization log found!"
+$vmWaitedForCustomization = $true
+}
+else 
+{
+Write-Verbose -Message "No Customization log found, waiting $($PollingTime) second(s)"
+Start-Sleep -Seconds $PollingTime
+$startupCounter += $PollingTime 
+}
+}
+}
+if ($WaitForIP.IsPresent -and -not($WaitForCustomization.IsPresent))
+{
+if ($vmWaitedForIP -eq $true)
+{
+Write-Verbose -Message "VM is powered on and has an IP after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM $InputObject
+}
+}
+elseif ($WaitForIP.IsPresent -and $WaitForCustomization.IsPresent)
+{
+if ($vmWaitedForIP -eq $true -and $vmWaitedForCustomization -eq $true)
+{
+Write-Verbose -Message "VM is powered on, has an IP and is customized after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM $InputObject
+}
+}
+else
+{
+if ($vmWaitedForCustomization -eq $true)
+{
+Write-Verbose -Message "VM is powered on and is customized after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM $InputObject
+}
+}
+} 
+else
+{
+Write-Verbose -Message "VM is powered on after $($startupCounter) second(s)!"
+$vmStarted = $true
+$returnObject = Get-VM $InputObject
+}
+}
+}
+}
+if ($PassThru.IsPresent)
+{
+return $returnObject
+}
+}
 }
